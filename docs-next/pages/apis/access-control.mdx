@@ -2,6 +2,571 @@ import { Markdown } from '../../components/Page';
 
 # Access Control API
 
-(coming soon)
+The `access` property of the [list configuration](./schema) and [field configuration](./fields) objects configures who can read, create, update, and delete items in your Keystone system.
+
+```typescript
+import { config, createSchema, list } from '@keystone-next/keystone/schema';
+
+export default config({
+  lists: createSchema({
+    ListName: list({
+      fields: {
+        fieldName: text({
+          access: {
+            /* ... */
+          },
+          /* ... */
+        }),
+      },
+      access: {
+        /* ... */
+      },
+    }),
+    /* ... */
+  }),
+  /* ... */
+});
+```
+
+This document covers the complete access control API.
+For a guide on how to use this API to apply common patterns please see the [access control guide](../guides/access-control).
+
+## List Access Control
+
+Keystone allows you to set up access control on a per-list basis.
+The default access control is to allow all operations for all users.
+Access control is applied to the generated CRUD (**c**reate, **r**ead, **u**pdate, **d**elete) queries and mutations in the [GraphQL API](./graphql).
+
+You can specify access control using either **concise** or **verbose** syntax.
+Verbose syntax provides a separate access control rule for each operation type, `create`, `read`, `update` and `delete`.
+Concise syntax provides a single access control rule which is used for all operation types.
+
+```typescript
+import { config, createSchema, list } from '@keystone-next/keystone/schema';
+
+export default config({
+  lists: createSchema({
+    ListName: list({
+      // Concise access control definition
+      access: true,
+      // Verbose access control definition
+      access: {
+        create: true,
+        read: true,
+        update: true,
+        delete: true,
+      },
+    }),
+    /* ... */
+  }),
+  /* ... */
+});
+```
+
+The examples below will all use the concise syntax, however the various access control rules can all be applied using verbose syntax.
+
+There are three different ways you can specify access-control rules: **static**, **declarative**, and **imperative**.
+
+### Static
+
+Static access control rules are simple boolean values.
+A value of `true` indicates that all users can perform the operation.
+A value of `false` indicates that no users can perform the operation.
+
+A static value of `false` implies that the operation can never be executed.
+As such, Keystone will exclude the related operations from GraphQL API.
+For example, if you set `{ create: false }` then the mutations `createItem` and `createItems` will be removed from the GraphQL API.
+If you want to keep the operations in the GraphQL API then you can use the [imperative](#imperative) access control rule `() => false`.
+
+```typescript
+import { config, createSchema, list } from '@keystone-next/keystone/schema';
+
+export default config({
+  lists: createSchema({
+    ListName: list({
+      // Static access control definition
+      access: true,
+    }),
+    /* ... */
+  }),
+  /* ... */
+});
+```
+
+### Declarative
+
+Declarative access control rules are GraphQL `where` statements which are used as additional filters when looking up items as part of read, update, or delete operations.
+The access control rule can be any valid query which could be applied as a `where` filter to the list in the [GraphQL API](./graphql).
+
+For read operations, the access control rule is merged with any other filters in the query, and only those items which match the merged filter are returned.
+
+For update and delete operations, the access control rule is merged with the `id` value to form a filter.
+For singular operations, e.g. `updateItem` or `createItem`, if the merged filter does not return an item then the mutation will return an `Access Denied` error.
+For multi-item operations, e.g. `updateItems` or `createItems`, if the merged filter excludes items then these will simply be ignored by the operation, giving the same behaviour as if the ID was missing.
+
+```typescript
+import { config, createSchema, list } from '@keystone-next/keystone/schema';
+
+export default config({
+  lists: createSchema({
+    ListName: list({
+      fields: { isLocked: checkbox() },
+      // Declarative access control definition
+      access: { isLocked: false },
+    }),
+    /* ... */
+  }),
+  /* ... */
+});
+```
+
+Declarative access control cannot be used for the `create` operation, as there is no filter being applied when creating an item.
+If you use declarative access control with the `create` operation, or with concise syntax, it is equivalent to the static access control definition `true` for create operations.
+
+Declarative access control rules are rarely used directly.
+A more common pattern is to return a declarative access control rule from an [imperative](#imperative) rule.
+
+### Imperative
+
+Imperative access control rules are functions which return either a boolean value or a [declarative](#declarative) value (e.g. a GraphQL `where` clause).
+Imperative access control functions can be either synchronous or async.
+The function is passed a set of arguments which depends on the operation being performed.
+
+If the function returns `false` then an `Access Denied` error will be returned.
+If the function returns `true` then the operation will be allowed.
+If the function returns a declarative value then this will be applied to the operation as decribed [above](#declarative).
+
+```typescript
+import { config, createSchema, list } from '@keystone-next/keystone/schema';
+
+export default config({
+  lists: createSchema({
+    ListName: list({
+      // Imperative access control definition
+      access: args => true,
+    }),
+    /* ... */
+  }),
+  /* ... */
+});
+```
+
+#### Imperative Function Arguments
+
+Imperative access control functions are passed a collection of arguments which can be used to determine whether the operation is allowed.
+
+
+| Argument        | Description                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| `listKey`       | The key of the list being operated on.                                                     |
+| `operation`     | The CRUD operation being performed (`'create'`, `'read'`, `'update'`, `'delete'`).         |
+| `session`       | FIXME                                                                                      |
+| `originalInput` | For `create` and `update` mutations, this is the data as passed in the mutation.           |
+| `gqlName`       | The name of the query or mutation which triggered the access check.                        |
+| `itemId`        | The `id` of the item being updated/deleted in singular `update` and `delete` operations.   |
+| `itemIds`       | The `ids` of the items being updated/deleted in multiple `update` and `delete` operations. |
+| `context`       | The `context` of the originating GraphQL operation.                                        |
+
+> **Important**: When writing imperative access control functions it is essential to consider both singular and multi-value operations.
+If you check the `itemId` in the singular case, then you also need to check the `itemIds` in the multi-value case.
+Similarly, `originalInput` will be different in the singular and multi-valued cases.
+
+```typescript
+import { config, createSchema, list } from '@keystone-next/keystone/schema';
+
+export default config({
+  lists: createSchema({
+    ListName: list({
+      // Imperative access control definition
+      access: ({
+        listKey,
+        operation,
+        session,
+        originalInput,
+        gqlName,
+        itemId,
+        itemIds,
+        context,
+      }) => {
+        return true;
+      },
+    }),
+    /* ... */
+  }),
+  /* ... */
+});
+```
+
+## Field Access Control
+
+### Static
+
+### Imperative
+
+#### Imperative Function Arguments
+
+### ...
+
+There are 3 ways to define the values of `access`, in order of flexibility:
+
+1. Static
+2. Imperative
+3. Declarative
+
+```typescript
+interface GraphQLWhere {
+  [key: string]: any;
+}
+
+interface AccessInput {
+  authentication: {
+    item?: {};
+    listKey?: string;
+  };
+  listKey?: string;
+  operation?: string;
+  originalInput?: {};
+  gqlName?: string;
+  itemId?: string;
+  itemIds?: [string];
+}
+
+type StaticAccess = boolean;
+type ImperativeAccess = (arg: AccessInput) => boolean;
+type DeclarativeAccess = GraphQLWhere | ((arg: AccessInput) => GraphQLWhere);
+
+interface GranularAccess {
+  create?: StaticAccess | ImperativeAccess;
+  read?: StaticAccess | ImperativeAccess | DeclarativeAccess;
+  update?: StaticAccess | ImperativeAccess | DeclarativeAccess;
+  delete?: StaticAccess | ImperativeAccess | DeclarativeAccess;
+}
+
+type ListConfig = {
+  access: StaticAccess | ImperativeAccess | GranularAccess;
+};
+```
+
+`GraphQLWhere` matches the `where` clause on the GraphQl type. For instance, on the list `User` it would match the input type `UserWhereInput`.
+
+`AccessInput` has the following properties:
+
+| Property                 | Description                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| `authentication`         | The currently authenticated user.                                                          |
+| `authentication.item`    | The details of the current user. Will be `undefined` for anonymous users.                  |
+| `authentication.listKey` | The list key of the currently authenticated user. Will be `undefined` for anonymous users. |
+| `listKey`                | The key of the list being operated on.                                                     |
+| `operation`              | The CRUD operation being performed (`'create'`, `'read'`, `'update'`, `'delete'`).         |
+| `originalInput`          | For `create` and `update` mutations, this is the data as passed in the mutation.           |
+| `gqlName`                | The name of the query or mutation which triggered the access check.                        |
+| `itemId`                 | The `id` of the item being updated/deleted in singular `update` and `delete` operations.   |
+| `itemIds`                | The `ids` of the items being updated/deleted in multiple `update` and `delete` operations. |
+| `context`                | The `context` of the originating GraphQL operation.                                        |
+
+When resolving `StaticAccess`:
+
+- `true`: Allow access
+- `false`: Do not allow access
+
+Definition of `access` operations:
+
+| Operation | Description                                            |
+| --------- | ------------------------------------------------------ |
+| `create`  | Ability to create new items in the list.               |
+| `read`    | Ability to view / fetch data on any items in the list. |
+| `update`  | Ability to alter data on any items in the list.        |
+| `delete`  | Ability to remove an item from the list.               |
+
+When access is denied, the GraphQL response will contain an error with `type: 'AccessDeniedError'`, and `null` for the data.
+
+> **Note:** The `create` operation cannot be given `DeclarativeAccess` - it does not make sense to do so and will throw an error if attempted.
+
+### Shorthand static Boolean
+
+Great for blanket access control for lists you want everyone/no one to see.
+
+```javascript
+keystone.createList('User', {
+  access: true,
+});
+```
+
+> **Note:** When set to `false`, the list queries/mutations/types will not be included in the GraphQL schema.
+
+### Granular static Boolean
+
+Use when you need some more fine grained control over what actions users can perform.
+
+```javascript
+keystone.createList('User', {
+  access: {
+    create: true,
+    read: true,
+    update: true,
+    delete: true,
+  },
+});
+```
+
+> **Note:** When set to `false`, the list queries/mutations/types exclusive to that operation will not be included in the GraphQL schema.
+> For example, setting `create: false` will cause the `createXXXX` mutation to be excluded from the schema, `update: false` will cause the `updateXXXX` mutation to be excluded, and so on.
+
+### Shorthand imperative Boolean
+
+Enables turning access on/off based on the currently authenticated user.
+
+```javascript
+keystone.createList('User', {
+  access: ({ authentication: { item, listKey } }) => {
+    return true;
+  },
+});
+```
+
+> **Note:** Even when returning `false`, the queries/mutations/types _will_ be included in the GraphQL Schema.
+
+### Granular imperative Boolean
+
+Use when you need some more fine grained control over what actions some or all anonymous/authenticated users can perform.
+
+```javascript
+keystone.createList('User', {
+  access: {
+    create: ({ authentication: { item, listKey } }) => true,
+    read: ({ authentication: { item, listKey } }) => true,
+    update: ({ authentication: { item, listKey } }) => true,
+    delete: ({ authentication: { item, listKey } }) => true,
+  },
+});
+```
+
+> **Note:** Even when returning `false`, the queries/mutations/types for that operation _will_ be included in the GraphQL Schema.
+> For example, `create: () => false` will still include the `createXXXX` mutation in the GraphQL Schema, and so on.
+
+### GraphQLWhere
+
+In the examples below, the `name_contains: 'k'` syntax matches the `UserWhereInput` GraphQL type for the list.
+
+1. For singular `read`/`update`/`delete` operations, when the `GraphQLWhere`
+   clause results in 0 items, an `AccessDeniedError` is returned.
+2. For batch `read` operations (eg; `query { allUsers }`), when the
+   `GraphQLWhere` clause results in 0 items returned, no error is returned.
+3. For `create` operations, an `AccessDeniedError` is returned if the operation
+   is set to / returns `false`
+
+#### Granular static `GraphQLWhere`
+
+Use when you need some more fine grained control over what items a user can
+perform actions on.
+
+```javascript
+keystone.createList('User', {
+  access: {
+    create: true,
+    read: { name_contains: 'k' },
+    update: { name_contains: 'k' },
+    delete: { name_contains: 'k' },
+  },
+
+  fields: {
+    name: { type: Text },
+  },
+});
+```
+
+#### Granular imperative `GraphQLWhere`
+
+Use when you need some more fine grained control over which items _and_
+actions anonymous/authenticated users can perform.
+
+```javascript
+keystone.createList('User', {
+  access: {
+    create: ({ authentication: { item, listKey } }) => true,
+    read: ({ authentication: { item, listKey } }) => ({
+      state_not: 'deactivated',
+    }),
+    update: ({ authentication: { item, listKey } }) => ({
+      state_not: 'deactivated',
+    }),
+    delete: ({ authentication: { item, listKey } }) => ({
+      state_not: 'deactivated',
+    }),
+  },
+
+  fields: {
+    state: {
+      type: Select,
+      options: ['active', 'deactivated'],
+      defaultValue: 'active',
+    },
+  },
+});
+```
+
+## Field level access control
+
+A key on the field config, `access` can be specified either as a single control,
+covering all CRU operations, or as an object keyed by CRU operation names.
+
+> **Important:** Unlike List level access, it is not possible to specify a Declarative
+> _where_ clause for Field level access.
+
+There are 2 ways to define the values of `access`, in order of flexibility:
+
+1. Static
+2. Imperative
+
+```typescript
+interface AccessInput {
+  authentication: {
+    item?: {};
+    listKey?: string;
+  };
+  listKey?: string;
+  fieldKey?: string;
+  originalInput?: {};
+  existingItem?: {};
+  operation?: string;
+  gqlName?: string;
+  itemId?: string;
+  itemIds?: [string];
+  context?: {};
+}
+
+type StaticAccess = boolean;
+type ImperativeAccess = (arg: AccessInput) => boolean;
+
+interface GranularAccess {
+  create?: StaticAccess | ImperativeAccess;
+  read?: StaticAccess | ImperativeAccess;
+  update?: StaticAccess | ImperativeAccess;
+}
+
+type FieldConfig = {
+  access: StaticAccess | ImperativeAccess | GranularAccess;
+};
+```
+
+> **Note:** Fields do not have `delete` access controls - these controls exists on
+> the list level only (it's not possible to _"delete"_ an existing field value -
+> only to modify it, and authentication is list-wide).
+
+| Property                 | Description                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `authentication`         | The currently authenticated user.                                                                             |
+| `authentication.item`    | The details of the current user. Will be `undefined` for anonymous users.                                     |
+| `authentication.listKey` | The list key of the currently authenticated user. Will be `undefined` for anonymous users.                    |
+| `listKey`                | The key of the list being operated on.                                                                        |
+| `fieldKey`               | The key of the field being operated on.                                                                       |
+| `originalInput`          | The data as passed in the mutation for `create` and `update` mutations (`undefined` for `read`).              |
+| `existingItem`           | The existing item this field belongs to for `update` mutations and `read` queries (`undefined` for `create`). |
+| `operation`              | The CRU operation being performed (`'create'`, `'read'`, `'update'`).                                         |
+| `gqlName`                | The name of the query or mutation which triggered the access check.                                           |
+| `itemId`                 | The `id` of the item being updated/deleted in singular `update` and `delete` operations.                      |
+| `itemIds`                | The `ids` of the items being updated/deleted in multiple `update` and `delete` operations.                    |
+| `context`                | The `context` of the originating GraphQL operation.                                                           |
+
+When defining `StaticAccess`:
+
+- `true`: Allow access
+- `false`: Do not allow access
+
+Definition of `access` operations:
+
+| Operation | Description                                                     |
+| --------- | --------------------------------------------------------------- |
+| `create`  | Ability to set the value of the field when creating a new item. |
+| `read`    | Ability to view / fetch the value of this field on an item.     |
+| `update`  | Ability to alter the value of this field on an item.            |
+
+When access is denied, the GraphQL response will contain an error with `type: 'AccessDeniedError'`,
+and `null` for the field.
+
+Let's break it down into concrete examples:
+
+### Shorthand static Boolean
+
+Great for blanket access control for fields you want everyone/no one to see.
+
+```javascript
+keystone.createList('User', {
+  fields: {
+    name: {
+      type: Text,
+      access: true,
+    },
+  },
+});
+```
+
+> **Note:** When set to `false`, the list queries/mutations/types will not include
+> this field in the GraphQL schema.
+
+### Granular static Boolean
+
+Use when you need some more fine grained control over what actions users can
+perform with this field.
+
+```javascript
+keystone.createList('User', {
+  fields: {
+    name: {
+      type: Text,
+      access: {
+        create: true,
+        read: true,
+        update: true,
+      },
+    },
+  },
+});
+```
+
+> **Note:** When set to `false`, this field will not be included in GraphQL
+> queries/mutations/types exclusively used by that operation.
+> Eg, setting `update: false` in the example above will remove the `name` field from the
+> `UserUpdateInput` type but may still include the field in `UserCreateInput` for example.
+
+### Shorthand imperative Boolean
+
+Enables turning access on/off based on the currently authenticated user.
+
+```javascript
+keystone.createList('User', {
+  fields: {
+    name: {
+      type: Text,
+      access: ({ authentication: { item, listKey }, existingItem }) => {
+        return true;
+      },
+    },
+  },
+});
+```
+
+> **Note:** Even when returning `false`, the queries/mutations/types _will_
+> include the field in the GraphQL Schema.
+
+### Granular imperative Boolean
+
+Use when you need some more fine grained control over what actions some or all
+anonymous/authenticated users can perform.
+
+```javascript
+keystone.createList('User', {
+  access: {
+    create: ({ authentication: { item, listKey }, existingItem }) => true,
+    read: ({ authentication: { item, listKey }, existingItem }) => true,
+    update: ({ authentication: { item, listKey }, existingItem }) => true,
+  },
+});
+```
+
+> **Note:** Even when returning `false`, this field _will_ be included in GraphQL
+> queries/mutations/types exclusively used by that operation.
+> Eg, setting `update: () => false` in the example above will still include the
+> `name` field in the `UserUpdateInput` type.
 
 export default ({ children }) => <Markdown>{children}</Markdown>;

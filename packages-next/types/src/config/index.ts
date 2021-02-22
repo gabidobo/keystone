@@ -4,7 +4,7 @@ import type { GraphQLSchema } from 'graphql';
 import { IncomingMessage } from 'http';
 
 import type { ListHooks } from './hooks';
-import type { ListAccessControl, FieldAccessControl } from './access-control';
+import type { FieldAccess, ListAccess, ListAccessArgs, FieldAccessArgs } from './access-control';
 import type {
   ListSchemaConfig,
   ListConfig,
@@ -117,4 +117,4 @@ export type ExtendGraphqlSchema = (schema: GraphQLSchema, keystone: BaseKeystone
 
 // Exports from sibling packages
 
-export type { ListHooks, ListAccessControl, FieldAccessControl };
+export type { ListHooks, FieldAccess, ListAccess, ListAccessArgs, FieldAccessArgs };
