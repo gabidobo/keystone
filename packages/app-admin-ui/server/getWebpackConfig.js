@@ -62,7 +62,7 @@ module.exports = function ({ adminMeta, adminViews, entry, outputPath }) {
     context: path.resolve(__dirname, '../client/'),
     devtool: mode === 'development' ? 'inline-source-map' : undefined,
     entry:
-      mode === 'production' ? entryPath : [entryPath, 'webpack-hot-middleware/client?reload=true'],
+      (mode === 'production' || !enableDevFeatures) ? entryPath : [entryPath, 'webpack-hot-middleware/client?reload=true'],
     output: {
       path: outputPath,
       filename: 'js/[name].[hash].bundle.js',
